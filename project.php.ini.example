@@ -1,0 +1,10 @@
+; Copy to project.php.ini and adjust extension_dir for your PHP installation.
+extension_dir="C:\Program Files\PHP\current\ext"
+extension=openssl
+extension=curl
+extension=fileinfo
+extension=mbstring
+extension=pdo_sqlite
+extension=sqlite3
+extension=zip
+memory_limit=512M

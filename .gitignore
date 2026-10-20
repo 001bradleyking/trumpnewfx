@@ -1,0 +1,14 @@
+/backend/vendor/
+/backend/.env
+/backend/database/database.sqlite
+/backend/storage/logs/*.log
+/backend/bootstrap/cache/*.php
+/frontend/node_modules/
+/frontend/dist/
+/.runtime/
+/composer.phar
+/cacert.pem
+/project.php.ini
+/backend/.phpunit.cache/
+Thumbs.db
+.DS_Store
