@@ -1,5 +1,7 @@
 # NEWS FX
 
+Projet fondateur trumpnewfx pour la coopération Trust API.
+
 Site vitrine React avec une API Laravel, un compte membre protégé par vérification e-mail et un parcours de réinitialisation du mot de passe. Le logo fourni est utilisé dans l’interface.
 
 ## Prérequis
