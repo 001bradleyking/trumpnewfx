@@ -32,7 +32,7 @@ jobs:
           fs --format cyclonedx --output /project/newsfx-sbom.cdx.json /project
 
       - name: Save SBOM as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: newsfx-sbom-${{ github.sha }}
           path: newsfx-sbom.cdx.json
