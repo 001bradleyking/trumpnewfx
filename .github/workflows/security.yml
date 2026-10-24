@@ -1,0 +1,40 @@
+name: Security scan and SBOM
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '19 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Scan dependencies, secrets and configuration
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/project"
+          aquasec/trivy:0.76.0
+          fs --scanners vuln,secret,misconfig --ignore-unfixed --exit-code 1 /project
+
+      - name: Generate CycloneDX SBOM
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/project"
+          aquasec/trivy:0.76.0
+          fs --format cyclonedx --output /project/newsfx-sbom.cdx.json /project
+
+      - name: Save SBOM as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: newsfx-sbom-${{ github.sha }}
+          path: newsfx-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 30

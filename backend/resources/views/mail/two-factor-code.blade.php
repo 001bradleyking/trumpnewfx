@@ -1,5 +1,7 @@
-NEWS FX — Code de vérification
+NEWS FX — {{ $purpose === 'registration' ? 'Finalisez la création de votre compte' : 'Confirmez votre connexion' }}
 
-Votre code de vérification est : {{ $code }}
+{{ $purpose === 'registration' ? 'Saisissez ce code pour terminer la création de votre compte NEWS FX :' : 'Saisissez ce code pour confirmer votre tentative de connexion à NEWS FX :' }}
 
-Il expire dans 10 minutes et ne doit pas être partagé. NEWS FX ne vous demandera jamais votre mot de passe ou vos informations de portefeuille.
+{{ $code }}
+
+Ce code expire dans 10 minutes, ne peut être utilisé qu’une fois et ne doit être communiqué à personne. NEWS FX ne vous demandera jamais votre mot de passe ni les informations de votre portefeuille.

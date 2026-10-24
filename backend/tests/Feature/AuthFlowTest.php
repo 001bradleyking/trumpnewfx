@@ -35,6 +35,7 @@ class AuthFlowTest extends TestCase
         $code = null;
         Mail::assertSent(TwoFactorCodeMail::class, function (TwoFactorCodeMail $mail) use (&$code): bool {
             $code = $mail->code;
+
             return $mail->purpose === 'registration';
         });
 
@@ -45,6 +46,42 @@ class AuthFlowTest extends TestCase
         $this->assertAuthenticatedAs($user);
         $this->assertNotNull($user->fresh()->email_verified_at);
         $this->assertDatabaseCount('two_factor_challenges', 0);
+    }
+
+    public function test_failed_registration_email_does_not_leave_an_unusable_challenge(): void
+    {
+        Mail::shouldReceive('to')
+            ->once()
+            ->with('amelie@example.com')
+            ->andThrow(new \RuntimeException('SMTP unavailable'));
+
+        $this->postJson('/api/auth/register', [
+            'name' => 'Amélie Nomo',
+            'email' => 'amelie@example.com',
+            'password' => 'StrongPassword42',
+            'password_confirmation' => 'StrongPassword42',
+        ])->assertStatus(503)
+            ->assertJsonPath('message', 'Votre compte est créé, mais le code e-mail n’a pas pu être envoyé. Réessayez en vous connectant dans quelques instants.');
+
+        $this->assertDatabaseHas('users', ['email' => 'amelie@example.com']);
+        $this->assertDatabaseCount('two_factor_challenges', 0);
+        $this->assertGuest();
+    }
+
+    public function test_failed_login_email_returns_a_retryable_error_without_authenticating(): void
+    {
+        $user = User::create(['name' => 'A. Nomo', 'email' => 'amelie@example.com', 'password' => 'StrongPassword42']);
+        Mail::shouldReceive('to')
+            ->once()
+            ->with($user->email)
+            ->andThrow(new \RuntimeException('SMTP unavailable'));
+
+        $this->postJson('/api/auth/login', ['email' => $user->email, 'password' => 'StrongPassword42'])
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'Le code e-mail n’a pas pu être envoyé. Vérifiez la configuration SMTP ou réessayez dans quelques instants.');
+
+        $this->assertDatabaseCount('two_factor_challenges', 0);
+        $this->assertGuest();
     }
 
     public function test_first_invalid_code_sends_one_security_alert_and_code_is_limited_to_five_attempts(): void
@@ -86,6 +123,7 @@ class AuthFlowTest extends TestCase
         $code = null;
         Mail::assertSent(TwoFactorCodeMail::class, function (TwoFactorCodeMail $mail) use (&$code): bool {
             $code = $mail->code;
+
             return $mail->purpose === 'login';
         });
 
@@ -102,6 +140,7 @@ class AuthFlowTest extends TestCase
         $code = null;
         Mail::assertSent(TwoFactorCodeMail::class, function (TwoFactorCodeMail $mail) use (&$code): bool {
             $code = $mail->code;
+
             return $mail->purpose === 'login';
         });
 

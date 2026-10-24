@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
+import { Portal } from './Portal'
 
-type User = { id: number; name: string; email: string }
-type Stats = { target_usd: number; raised_usd: number; founders_count: number; campaign_end_at: string | null; verified: boolean; status: string }
+type User = { id: number; name: string; email: string; is_admin: boolean }
+type Announcement = { first_name: string; last_name: string; comments: Partial<Record<'fr' | 'en' | 'es' | 'pt', string>> }
+type Stats = { target_usd: number; raised_usd: number; founders_count: number; campaign_end_at: string | null; standard_duration_months: number; verified: boolean; status: string; announcement?: Announcement | null }
 type AuthView = 'login' | 'register' | 'verify' | 'forgot' | 'reset'
-type ApiResult = { message?: string; user?: User | null; requires_2fa?: boolean; csrf_token?: string; errors?: Record<string, string[]> }
+type Page = 'home' | 'account' | 'payment' | 'admin'
+type ApiResult = { message?: string; user?: User | null; requires_2fa?: boolean; csrf_token?: string; errors?: Record<string, string[]>; payment?: { id: number }; [key: string]: unknown }
 
-const emptyStats: Stats = { target_usd: 100000, raised_usd: 0, founders_count: 0, campaign_end_at: null, verified: false, status: 'preproduction' }
+const emptyStats: Stats = { target_usd: 100000, raised_usd: 0, founders_count: 0, campaign_end_at: null, standard_duration_months: 0, verified: false, status: 'preparation' }
+const supportedLocales = ['fr', 'en', 'es', 'pt'] as const
+
+function preferredLocale(): typeof supportedLocales[number] {
+  for (const language of navigator.languages.length ? navigator.languages : [navigator.language]) {
+    const locale = language.toLowerCase().split('-')[0]
+    if (supportedLocales.includes(locale as typeof supportedLocales[number])) return locale as typeof supportedLocales[number]
+  }
+  return 'fr'
+}
 
 function App() {
   const [user, setUser] = useState<User | null>(null)
@@ -18,10 +30,32 @@ function App() {
   const [authEmail, setAuthEmail] = useState('')
   const [code, setCode] = useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
+  const [page, setPage] = useState<Page>(() => ({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' }[window.location.pathname] as Page | undefined ?? 'home'))
   const csrf = useRef('')
+  const pendingPage = useRef<Page | null>(null)
+  const pendingOffer = useRef<string | null>(null)
 
   useEffect(() => {
+    const syncPage = () => setPage(({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' } as Record<string, Page>)[window.location.pathname] ?? 'home')
+    window.addEventListener('popstate', syncPage)
     const params = new URLSearchParams(window.location.search)
+    const googleState = params.get('auth')
+    if (googleState === 'google_verify') {
+      setAuthView('verify')
+      setMessage('Connexion Google reconnue. Saisissez le code envoyé à votre adresse e-mail pour terminer la connexion.')
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (googleState?.startsWith('google_')) {
+      const googleMessages: Record<string, string> = {
+        google_unavailable: 'La connexion Google n’est pas encore configurée sur le serveur.',
+        google_unverified: 'Google n’a pas confirmé cette adresse e-mail. Essayez une autre adresse.',
+        google_account_conflict: 'Cette adresse est déjà reliée à un autre compte Google. Contactez l’assistance.',
+        google_account_unavailable: 'Ce compte est suspendu. Contactez l’assistance.',
+        google_failed: 'La connexion Google a échoué. Réessayez ou connectez-vous par e-mail.',
+      }
+      setMessage(googleMessages[googleState] ?? 'La connexion Google a échoué.')
+      if (googleState !== 'google_unavailable') setAuthView('login')
+      window.history.replaceState({}, '', window.location.pathname)
+    }
     if (window.location.pathname === '/reset-password' && params.has('token')) {
       setAuthView('reset')
       setAuthEmail(params.get('email') ?? '')
@@ -32,7 +66,21 @@ function App() {
         const csrfResponse = await fetch('/api/csrf', { credentials: 'include' })
         csrf.current = ((await csrfResponse.json()) as ApiResult).csrf_token ?? ''
         const me = await fetch('/api/auth/me', { credentials: 'include', headers: { Accept: 'application/json' } })
-        setUser(((await me.json()) as ApiResult).user ?? null)
+        const currentUser = ((await me.json()) as ApiResult).user ?? null
+        setUser(currentUser)
+        if (!currentUser && window.location.pathname !== '/') {
+          const wanted = ({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' } as Record<string, Page>)[window.location.pathname] ?? 'home'
+          pendingPage.current = wanted
+          setAuthView('login')
+          if (wanted !== 'admin') {
+            window.history.replaceState({}, '', '/')
+            setPage('home')
+          }
+        } else if (currentUser && window.location.pathname === '/admin' && !currentUser.is_admin) {
+          window.history.replaceState({}, '', '/')
+          setPage('home')
+          setMessage('Cette adresse ne dispose pas de l’accès administrateur.')
+        }
         const publicStats = await fetch('/api/public/stats', { headers: { Accept: 'application/json' } })
         if (publicStats.ok) setStats((await publicStats.json()) as Stats)
       } catch {
@@ -47,17 +95,17 @@ function App() {
       }
     }), { threshold: 0.12 })
     document.querySelectorAll('.reveal').forEach((element) => observer.observe(element))
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); window.removeEventListener('popstate', syncPage) }
   }, [])
 
-  async function request(url: string, payload?: Record<string, string>): Promise<ApiResult> {
+  async function request(url: string, payload?: Record<string, unknown>, method?: string): Promise<ApiResult> {
     if (!csrf.current) {
       const csrfResponse = await fetch('/api/csrf', { credentials: 'include', headers: { Accept: 'application/json' } })
       csrf.current = ((await csrfResponse.json()) as ApiResult).csrf_token ?? ''
     }
 
     const response = await fetch(url, {
-      method: payload ? 'POST' : 'GET',
+      method: method ?? (payload ? 'POST' : 'GET'),
       credentials: 'include',
       headers: { Accept: 'application/json', ...(payload ? { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf.current } : {}) },
       ...(payload ? { body: JSON.stringify(payload) } : {}),
@@ -75,6 +123,33 @@ function App() {
     setCode('')
     setAuthView(view)
     setMobileMenu(false)
+  }
+
+  function navigate(nextPage: Page, query = '', replace = false) {
+    setPage(nextPage)
+    const path = `${nextPage === 'home' ? '/' : `/${nextPage}`}${query}`
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', path)
+    setMobileMenu(false)
+    if (nextPage === 'home') {
+      void fetch('/api/public/stats', { headers: { Accept: 'application/json' } }).then((response) => response.ok ? response.json() : null).then((data) => { if (data) setStats(data as Stats) })
+    }
+  }
+
+  async function startCheckout(offer: string, justAuthenticated = false) {
+    if (!user && !justAuthenticated) {
+      pendingOffer.current = offer
+      pendingPage.current = 'payment'
+      openAuth('login')
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await request('/api/member/checkout', { offer })
+      const payment = result.payment as { id: number }
+      navigate('payment', `?id=${payment.id}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Impossible de préparer le paiement.')
+    } finally { setBusy(false) }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -96,11 +171,20 @@ function App() {
         setMessage('Saisissez le code envoyé à votre adresse e-mail pour terminer la connexion.')
       } else if (authView === 'verify') {
         const result = await request('/api/auth/verify', { code })
-        setUser(result.user ?? null)
+        const verifiedUser = result.user ?? null
+        setUser(verifiedUser)
         setAuthView(null)
         setCode('')
         setMessage('')
-        window.setTimeout(() => document.querySelector('#member-space')?.scrollIntoView({ behavior: 'smooth' }), 80)
+        if (pendingOffer.current) {
+          const requestedOffer = pendingOffer.current
+          pendingOffer.current = null
+          await startCheckout(requestedOffer, true)
+        } else {
+          const destination = pendingPage.current ?? 'account'
+          pendingPage.current = null
+          navigate(destination)
+        }
       } else if (authView === 'forgot') {
         const result = await request('/api/auth/forgot-password', { email: value('email') })
         setMessage(result.message ?? 'Si cette adresse correspond à un compte, un lien a été envoyé.')
@@ -135,7 +219,9 @@ function App() {
     setBusy(true)
     try {
       await request('/api/auth/logout', {})
+      csrf.current = ''
       setUser(null)
+      navigate('home')
       setMessage('Vous êtes déconnecté.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'La déconnexion a échoué.')
@@ -145,24 +231,30 @@ function App() {
   }
 
   const progress = Math.max(0, Math.min(100, (stats.raised_usd / (stats.target_usd || 100000)) * 100))
+  const requestedLocale = preferredLocale()
+  const announcementText = stats.announcement?.comments[requestedLocale] || stats.announcement?.comments.fr
+  const announcementLocale = stats.announcement?.comments[requestedLocale] ? requestedLocale : 'fr'
   const scrollTo = (id: string) => {
+    if (page !== 'home') navigate('home')
     setMobileMenu(false)
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+    window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }), 40)
   }
 
   return (
-    <div className="site-shell">
-      <div className="ambient ambient-one" /><div className="ambient ambient-two" />
+    <div className={page === 'admin' ? 'admin-isolated-shell' : 'site-shell'}>
+      {page !== 'admin' && <><div className="ambient ambient-one" /><div className="ambient ambient-two" />
+      {page === 'home' && stats.announcement && announcementText && <aside className="community-announcement" lang={announcementLocale} aria-label="Message de la communauté"><span className="announcement-mark" aria-hidden="true">✦</span><p><span className="announcement-message">{announcementText}</span><span className="announcement-author">{stats.announcement.first_name} {stats.announcement.last_name}</span></p></aside>}
       <header className="site-header">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); scrollTo('top') }} aria-label="NEWS FX accueil"><img src="/news-fx-logo.jpeg" alt="NEWS FX — Informer, analyser, anticiper" /></a>
         <button className="menu-button" aria-label="Ouvrir le menu" aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}><span /><span /></button>
         <nav className={mobileMenu ? 'nav-links nav-open' : 'nav-links'} aria-label="Navigation principale">
           <button onClick={() => scrollTo('project')}>Le projet</button><button onClick={() => scrollTo('objective')}>Objectif</button><button onClick={() => scrollTo('offers')}>Offres</button><button onClick={() => scrollTo('faq')}>FAQ</button>
         </nav>
-        <div className="nav-actions">{user ? <button className="button button-quiet" onClick={() => scrollTo('member-space')}>Mon espace</button> : <button className="button button-quiet" onClick={() => openAuth('login')}>Connexion</button>}<button className="button button-gold button-small" onClick={() => user ? scrollTo('member-space') : openAuth('register')}>{user ? 'Espace membre' : 'Devenir fondateur'}<span aria-hidden="true">↗</span></button></div>
-      </header>
+        <div className="nav-actions">{user ? <><button className="button button-quiet" onClick={() => navigate('account')}>Mon espace</button>{user.is_admin && <button className="button button-quiet" onClick={() => navigate('admin')}>Admin</button>}</> : <button className="button button-quiet" onClick={() => { pendingPage.current = 'account'; openAuth('login') }}>Connexion</button>}<button className="button button-gold button-small" onClick={() => user ? navigate('account') : openAuth('register')}>{user ? 'Espace membre' : 'Devenir fondateur'}<span aria-hidden="true">↗</span></button></div>
+      </header></>}
 
       <main id="top">
+        {page === 'home' ? <>
         <section className="hero section-wrap">
           <div className="hero-copy">
             <div className="eyebrow"><span className="live-dot" /> EN PRÉPARATION <span className="eyebrow-divider" /> NEWS FX</div>
@@ -198,31 +290,33 @@ function App() {
         </section>
 
         <section className="objective-section" id="objective"><div className="section-wrap objective-grid">
-          <div className="objective-copy reveal"><div className="eyebrow">UNE ÉTAPE À LA FOIS</div><h2>Préparer l’accès.<br /><span>Construire la confiance.</span></h2><p>L’accès à Truth API n’est pas encore confirmé. Le montant de 100 000 USD est une estimation de travail : il devra être confirmé par une proposition officielle et une autorisation écrite de redistribution.</p><div className="objective-footnote"><span>↗</span> Aucun fonds n’est collecté par cette page.</div></div>
-          <div className="progress-card glass-card reveal delay-one"><div className="progress-head"><div><span className="mini-label">MOBILISATION VÉRIFIÉE</span><h3>État de l’objectif</h3></div><span className="status-pill"><span className="live-dot" /> PRÉPARATION</span></div><div className="progress-values"><strong>{stats.raised_usd.toLocaleString('fr-FR')} <small>USD</small></strong><span>sur {stats.target_usd.toLocaleString('fr-FR')} USD</span></div><div className="progress-track" role="progressbar" aria-label="Progression vérifiée vers l’objectif" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }} /></div><div className="progress-meta"><span>{progress.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} % de l’objectif</span><span>{stats.founders_count} membres fondateurs</span></div><div className="progress-divider" /><div className="countdown-row"><div><span className="mini-label">FIN DE CAMPAGNE</span><b>{stats.campaign_end_at ? new Date(stats.campaign_end_at).toLocaleDateString('fr-FR') : 'Calendrier à définir'}</b></div><span className="calendar-icon">▦</span></div><p className="progress-disclaimer">Le montant et le nombre de membres restent à zéro tant que des données vérifiées ne sont pas connectées.</p></div>
+          <div className="objective-copy reveal"><div className="eyebrow">UNE ÉTAPE À LA FOIS</div><h2>Préparer l’accès.<br /><span>Construire la confiance.</span></h2><p>L’accès à Truth API n’est pas encore confirmé. Le montant de 100 000 USD est une estimation de travail : il devra être confirmé par une proposition officielle et une autorisation écrite de redistribution.</p><div className="objective-footnote"><span>↗</span> Les versements ne sont possibles que si la campagne est ouverte dans l’espace admin.</div></div>
+          <div className="progress-card glass-card reveal delay-one"><div className="progress-head"><div><span className="mini-label">MOBILISATION VÉRIFIÉE</span><h3>État de l’objectif</h3></div><span className="status-pill"><span className="live-dot" /> {({ preparation: 'PRÉPARATION', open: 'OUVERTE', paused: 'EN PAUSE', closed: 'TERMINÉE' } as Record<string, string>)[stats.status] ?? stats.status.toUpperCase()}</span></div><div className="progress-values"><strong>{stats.raised_usd.toLocaleString('fr-FR')} <small>USD</small></strong><span>sur {stats.target_usd.toLocaleString('fr-FR')} USD</span></div><div className="progress-track" role="progressbar" aria-label="Progression vérifiée vers l’objectif" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }} /></div><div className="progress-meta"><span>{progress.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} % de l’objectif</span><span>{stats.founders_count} membres fondateurs</span></div><div className="progress-divider" /><div className="countdown-row"><div><span className="mini-label">FIN DE CAMPAGNE</span><b>{stats.campaign_end_at ? new Date(stats.campaign_end_at).toLocaleDateString('fr-FR') : 'Calendrier à définir'}</b></div><span className="calendar-icon">▦</span></div><p className="progress-disclaimer">Le total affiché ne comprend que les paiements vérifiés par l’administration.</p></div>
         </div></section>
 
         <section className="section-wrap referral-section"><div className="referral-panel reveal"><div className="referral-copy"><div className="eyebrow">FAIRE GRANDIR LA COMMUNAUTÉ</div><h2>Vous connaissez le projet.<br /><span>Faites-le découvrir.</span></h2><p>Un programme de parrainage fondateur est à l’étude. Des bonus ou réductions sur les offres futures pourront être proposés après validation de règles claires.</p><button className="button button-outline" onClick={() => user ? scrollTo('member-space') : openAuth('register')}>Être informé du programme <span>↗</span></button></div><div className="referral-board"><div className="board-head"><span>CLASSEMENT FONDATEURS</span><span>À VENIR</span></div><div className="board-empty"><div className="board-circles"><span>✳</span><span>✳</span><span>✳</span></div><b>Les premiers membres écriront l’histoire.</b><p>Le classement apparaîtra lorsque le programme et ses règles seront validés.</p></div><div className="board-footer"><span>RÉCOMPENSES NON ACTIVÉES</span><span>•••</span></div></div></div></section>
 
-        <section className="section-wrap offers-section" id="offers"><div className="section-heading reveal"><div><div className="eyebrow">OFFRES ENVISAGÉES</div><h2>Un accès pensé pour durer.</h2></div><p>Tarifs indicatifs du cahier des charges. La vente reste fermée tant que les modalités de service et de remboursement ne sont pas validées.</p></div><div className="offer-grid">
-          <article className="offer-card offer-featured reveal"><div className="offer-top"><span className="offer-label">OFFRE DE LANCEMENT</span><span className="offer-spark">✳</span></div><h3>Membre fondateur</h3><p>Pour accompagner la phase de préparation.</p><div className="offer-price">100 <small>USD*</small></div><div className="offer-period">Période envisagée : quatre mois</div><div className="offer-line" /><ul><li>Accès aux alertes privées, si le service démarre</li><li>Un mois offert envisagé au lancement effectif</li><li>Accès Discord après paiement confirmé</li></ul><button className="button button-gold offer-button" onClick={() => openAuth('register')}>Préinscription bientôt <span>↗</span></button><small className="offer-legal">*Prix et modalités à confirmer. Aucun paiement disponible.</small></article>
-          <article className="offer-card reveal delay-one"><div className="offer-top"><span className="offer-label">OFFRE ENVISAGÉE</span><span className="offer-spark muted-spark">◌</span></div><h3>Membre standard</h3><p>La continuité de la veille après lancement.</p><div className="offer-price">1 000 <small>USD*</small></div><div className="offer-period">Durée et renouvellement à définir</div><div className="offer-line" /><ul><li>Accès aux alertes et analyses privées</li><li>Communauté membre sécurisée</li><li>Contenu définitif à publier avant ouverture</li></ul><button className="button button-outline offer-button" onClick={() => openAuth('register')}>Être informé <span>↗</span></button><small className="offer-legal">*Prix indicatif, non activé à la vente.</small></article>
+        <section className="section-wrap offers-section" id="offers"><div className="section-heading reveal"><div><div className="eyebrow">OFFRES</div><h2>Un accès pensé pour durer.</h2></div><p>Versement exclusivement en USDT sur TRON TRC20. Chaque paiement reste en attente jusqu’à sa vérification manuelle par l’administration.</p></div><div className="offer-grid">
+          <article className="offer-card offer-featured reveal"><div className="offer-top"><span className="offer-label">OFFRE DE LANCEMENT</span><span className="offer-spark">✳</span></div><h3>Membre fondateur</h3><p>Pour accompagner la phase de préparation.</p><div className="offer-price">100 <small>USD</small></div><div className="offer-period">Période prévue : quatre mois</div><div className="offer-line" /><ul><li>Accès aux alertes privées selon l’ouverture du service</li><li>Activation après vérification du versement</li><li>USDT uniquement sur le réseau TRON (TRC20)</li></ul><button className="button button-gold offer-button" onClick={() => void startCheckout('founder')}>Choisir cette offre <span>↗</span></button></article>
+          <article className="offer-card reveal delay-one"><div className="offer-top"><span className="offer-label">OFFRE STANDARD</span><span className="offer-spark muted-spark">◌</span></div><h3>Membre standard</h3><p>La continuité de la veille après lancement.</p><div className="offer-price">1 000 <small>USD</small></div><div className="offer-period">Durée prévue (mois) : {stats.standard_duration_months || 'à définir'}</div><div className="offer-line" /><ul><li>Accès aux alertes et analyses privées</li><li>Communauté membre sécurisée</li><li>USDT uniquement sur le réseau TRON (TRC20)</li></ul><button className="button button-outline offer-button" onClick={() => void startCheckout('standard')}>Choisir cette offre <span>↗</span></button></article>
         </div></section>
 
         <section className="section-wrap process-section"><div className="section-heading reveal"><div><div className="eyebrow">COMMENT ÇA MARCHE</div><h2>Simple, clair, vérifiable.</h2></div></div><div className="process-list"><div className="process-item reveal"><span>01</span><div><h3>Le fournisseur, sous conditions</h3><p>Demander un devis officiel, vérifier le prix, les limites techniques et les droits de redistribution commerciale.</p></div><i>↘</i></div><div className="process-item reveal"><span>02</span><div><h3>Les informations, avec leur source</h3><p>Contrôler l’origine, horodater et séparer le fait rapporté du résumé et de l’analyse.</p></div><i>↘</i></div><div className="process-item reveal"><span>03</span><div><h3>La diffusion, après validation</h3><p>Les alertes destinées aux membres seront diffusées dans l’espace privé lorsque le service sera opérationnel.</p></div><i>↗</i></div></div><div className="notice-card reveal"><span className="notice-mark">i</span><p><b>Une étape préalable importante.</b> Tant que Truth API, son coût et ses droits ne sont pas confirmés, NEWS FX ne garantit ni vitesse de transmission ni accès anticipé aux annonces.</p></div></section>
 
-        <section className="section-wrap faq-section" id="faq"><div className="section-heading reveal"><div><div className="eyebrow">QUESTIONS FRÉQUENTES</div><h2>Les réponses sans détour.</h2></div></div><div className="faq-list"><details className="faq-item reveal"><summary>NEWS FX est-il déjà opérationnel ?<span>＋</span></summary><p>Non. Le projet est en préparation. L’accès à Truth API, les droits de diffusion et le calendrier restent à confirmer.</p></details><details className="faq-item reveal"><summary>La progression et le nombre de membres sont-ils réels ?<span>＋</span></summary><p>Les statistiques affichées proviennent du service et restent à zéro tant qu’aucune donnée de paiement vérifiée n’est reliée. Aucun chiffre d’audience n’est inventé.</p></details><details className="faq-item reveal"><summary>Comment seront confirmés les paiements ?<span>＋</span></summary><p>Le cahier des charges prévoit USDT TRC20. Une solution compatible pour carte bancaire ou virement devra être étudiée séparément. Aucun moyen de paiement n’est activé à ce stade.</p></details><details className="faq-item reveal"><summary>Les alertes donnent-elles des conseils de trading ?<span>＋</span></summary><p>Non. NEWS FX proposera des informations générales et du contexte, sans conseil personnalisé, garantie de résultat ou recommandation d’exécution d’ordres.</p></details><details className="faq-item reveal"><summary>Quand l’accès Discord sera-t-il ouvert ?<span>＋</span></summary><p>Uniquement après le lancement du service, confirmation fiable du paiement et activation d’un abonnement. Les salons privés devront être protégés par des rôles.</p></details></div></section>
+        <section className="section-wrap faq-section" id="faq"><div className="section-heading reveal"><div><div className="eyebrow">QUESTIONS FRÉQUENTES</div><h2>Les réponses sans détour.</h2></div></div><div className="faq-list"><details className="faq-item reveal"><summary>NEWS FX est-il déjà opérationnel ?<span>＋</span></summary><p>Le projet est en préparation. L’accès à Truth API, les droits de diffusion et le calendrier restent à confirmer.</p></details><details className="faq-item reveal"><summary>La progression affichée est-elle vérifiée ?<span>＋</span></summary><p>Seuls les paiements vérifiés manuellement par l’administration alimentent le montant collecté et le nombre de membres.</p></details><details className="faq-item reveal"><summary>Comment payer ?<span>＋</span></summary><p>Uniquement en USDT sur le réseau TRON (TRC20). Vérifiez le réseau et l’adresse avant d’envoyer : les erreurs peuvent entraîner une perte irréversible. L’accès n’est activé qu’après vérification de la transaction.</p></details><details className="faq-item reveal"><summary>Les alertes donnent-elles des conseils de trading ?<span>＋</span></summary><p>Non. NEWS FX proposera des informations générales et du contexte, sans conseil personnalisé, garantie de résultat ou recommandation d’exécution d’ordres.</p></details><details className="faq-item reveal"><summary>Quand recevrai-je les accès communautaires ?<span>＋</span></summary><p>Après validation du paiement par l’administration, les boutons Discord et/ou Telegram activés apparaîtront dans votre espace membre.</p></details></div></section>
 
         <section className="final-cta section-wrap"><div className="cta-inner reveal"><img src="/news-fx-logo.jpeg" alt="" /><div><div className="eyebrow">NEWS FX · EN PRÉPARATION</div><h2>Suivre l’actualité avec plus de clarté.</h2><p>Inscrivez-vous pour suivre les prochaines étapes du projet.</p></div><button className="button button-gold button-large" onClick={() => user ? scrollTo('member-space') : openAuth('register')}>Créer mon compte <span>↗</span></button></div></section>
 
-        {user && <section className="section-wrap member-section" id="member-space"><div className="member-card glass-card"><div><div className="eyebrow">ESPACE PERSONNEL</div><h2>Bonjour, {user.name.split(' ')[0]}.</h2><p>Connecté avec {user.email}. Votre session a été validée par code e-mail.</p><div className="member-status"><span className="live-dot" /> COMPTE VÉRIFIÉ · ABONNEMENT NON ACTIVÉ</div><p className="member-note">Les paiements et l’accès Discord ne sont pas ouverts en préproduction. Le bouton Discord apparaîtra dans cet espace uniquement après confirmation d’un abonnement actif.</p></div><button className="button button-outline" onClick={() => void logout()} disabled={busy}>{busy ? 'Déconnexion…' : 'Se déconnecter'}</button></div></section>}
+        {user && <section className="section-wrap member-section" id="member-space"><div className="member-card glass-card"><div><div className="eyebrow">ESPACE PERSONNEL</div><h2>Bonjour, {user.name.split(' ')[0]}.</h2><p>Connecté avec {user.email}. Votre session a été validée par code e-mail.</p><div className="member-status"><span className="live-dot" /> COMPTE VÉRIFIÉ · ACCÈS PAR PAIEMENT VALIDÉ</div><p className="member-note">Consultez votre espace personnel pour suivre les commandes et rejoindre Discord ou Telegram après vérification manuelle.</p></div><button className="button button-outline" onClick={() => navigate('account')}>Ouvrir mon espace</button></div></section>}
+        </> : <Portal page={page} request={request} navigate={(destination, query) => navigate(destination, query)} userName={user?.name ?? ''} logout={() => void logout()} />}
       </main>
 
-      <footer className="site-footer"><div className="footer-top section-wrap"><a className="footer-logo" href="#top" onClick={(event) => { event.preventDefault(); scrollTo('top') }}><img src="/news-fx-logo.jpeg" alt="NEWS FX" /></a><p>Informer. Analyser. Anticiper.<br /><span>L’information financière avec contexte et transparence.</span></p><div className="footer-links"><button onClick={() => scrollTo('project')}>À propos</button><button onClick={() => scrollTo('faq')}>FAQ</button><a href="mailto:contact@news-fx.com">Contact</a><button onClick={() => openAuth('login')}>Espace membre</button></div></div><div className="footer-bottom section-wrap"><span>© {new Date().getFullYear()} NEWS FX · Tous droits réservés.</span><span>Information générale — pas un conseil financier.</span><button onClick={() => setMessage('Les documents juridiques complets seront publiés avant l’ouverture du service.')}>Conditions & confidentialité</button></div></footer>
+      {page !== 'admin' && <footer className="site-footer"><div className="footer-top section-wrap"><a className="footer-logo" href="#top" onClick={(event) => { event.preventDefault(); navigate('home') }}><img src="/news-fx-logo.jpeg" alt="NEWS FX" /></a><p>INFORMER • ANALYSER • ANTICIPER<br /><span>L’information financière avec contexte et transparence.</span></p><div className="footer-links"><button onClick={() => scrollTo('project')}>À propos</button><button onClick={() => scrollTo('faq')}>FAQ</button><a href="mailto:contact@news-fx.com">Contact</a><button onClick={() => user ? navigate('account') : (pendingPage.current = 'account', openAuth('login'))}>Espace membre</button></div></div><div className="footer-bottom section-wrap"><span>© {new Date().getFullYear()} NEWS FX · Tous droits réservés.</span><span>Information générale — pas un conseil financier.</span><button onClick={() => setMessage('Les documents juridiques complets seront publiés avant l’ouverture du service.')}>Conditions & confidentialité</button></div></footer>}
 
       {message && !authView && <div className="toast" role="status">{message}<button aria-label="Fermer" onClick={() => setMessage('')}>×</button></div>}
 
       {authView && <div className="auth-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && authView !== 'verify') setAuthView(null) }}><section className="auth-panel" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button className="auth-close" onClick={() => { setAuthView(null); setMessage('') }} aria-label="Fermer">×</button><div className="auth-brand"><img src="/news-fx-logo.jpeg" alt="NEWS FX" /></div><div className="eyebrow">SÉCURITÉ DU COMPTE</div><h2 id="auth-title">{authView === 'register' ? 'Créer votre compte.' : authView === 'login' ? 'Ravi de vous revoir.' : authView === 'verify' ? 'Vérifiez votre e-mail.' : authView === 'forgot' ? 'Mot de passe oublié ?' : 'Choisissez un nouveau mot de passe.'}</h2><p className="auth-intro">{authView === 'register' ? 'Un compte pour suivre le projet et préparer votre espace membre.' : authView === 'login' ? 'Une connexion protégée en deux étapes.' : authView === 'verify' ? 'Saisissez le code à 6 chiffres envoyé à votre adresse. Il expire dans 10 minutes.' : authView === 'forgot' ? 'Nous vous enverrons un lien de réinitialisation si votre adresse est associée à un compte.' : 'Le lien est à usage unique et limité dans le temps.'}</p>
+        {(authView === 'login' || authView === 'register') && <a className="google-auth-button" href="/auth/google"><span aria-hidden="true">G</span> Continuer avec Google</a>}
         {authView === 'verify' ? <form onSubmit={submit} className="auth-form"><label htmlFor="verification-code">Code envoyé par e-mail</label><input id="verification-code" className="code-input" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="••••••" required /><p className="field-hint">Le code n’est jamais demandé par téléphone ou message privé.</p>{message && <p className="form-message" role="status">{message}</p>}<button className="button button-gold auth-submit" disabled={busy || code.length !== 6}>{busy ? 'Vérification…' : 'Valider et ouvrir ma session'} <span>↗</span></button><button className="text-button" type="button" onClick={() => void resendCode()} disabled={busy}>Renvoyer un nouveau code</button></form> : <form onSubmit={submit} className="auth-form">{authView === 'register' && <><label htmlFor="name">Nom complet</label><input id="name" name="name" autoComplete="name" minLength={2} maxLength={100} placeholder="Votre nom" required /></>}{(authView === 'login' || authView === 'register' || authView === 'forgot') && <><label htmlFor="email">Adresse e-mail</label><input id="email" name="email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="vous@exemple.com" required /></>}{(authView === 'login' || authView === 'register' || authView === 'reset') && <><label htmlFor="password">{authView === 'reset' ? 'Nouveau mot de passe' : 'Mot de passe'}</label><input id="password" name="password" type="password" autoComplete={authView === 'login' ? 'current-password' : 'new-password'} minLength={authView === 'login' ? 1 : 10} placeholder={authView === 'login' ? 'Votre mot de passe' : '10 caractères minimum'} required />{authView !== 'login' && <><label htmlFor="password_confirmation">Confirmer le mot de passe</label><input id="password_confirmation" name="password_confirmation" type="password" autoComplete="new-password" minLength={10} placeholder="Confirmez le mot de passe" required /></>}</>}{message && <p className="form-message" role="status">{message}</p>}<button className="button button-gold auth-submit" disabled={busy}>{busy ? 'Veuillez patienter…' : authView === 'register' ? 'Créer le compte' : authView === 'login' ? 'Continuer' : authView === 'forgot' ? 'Envoyer le lien' : 'Mettre à jour le mot de passe'} <span>↗</span></button></form>}
         <div className="auth-switch">{authView === 'login' && <><button className="text-button" onClick={() => openAuth('forgot')}>Mot de passe oublié ?</button><p>Pas encore de compte ? <button onClick={() => openAuth('register')}>Créer un compte</button></p></>}{authView === 'register' && <p>Déjà membre ? <button onClick={() => openAuth('login')}>Se connecter</button></p>}{authView === 'forgot' && <p>Vous vous souvenez ? <button onClick={() => openAuth('login')}>Retour à la connexion</button></p>}{authView === 'reset' && <p><button onClick={() => openAuth('login')}>Retour à la connexion</button></p>}{authView === 'verify' && <p>Besoin d’aide ? <a href="mailto:contact@news-fx.com">Contacter l’assistance</a></p>}</div><p className="auth-privacy">Vos identifiants ne sont jamais partagés. Le code e-mail est aléatoire, temporaire et stocké sous forme hachée.</p>
       </section></div>}
