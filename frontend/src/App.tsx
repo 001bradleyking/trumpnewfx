@@ -30,6 +30,7 @@ function App() {
   const [authEmail, setAuthEmail] = useState('')
   const [code, setCode] = useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
+  const [activeSection, setActiveSection] = useState('')
   const [page, setPage] = useState<Page>(() => ({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' }[window.location.pathname] as Page | undefined ?? 'home'))
   const csrf = useRef('')
   const pendingPage = useRef<Page | null>(null)
@@ -97,6 +98,20 @@ function App() {
     document.querySelectorAll('.reveal').forEach((element) => observer.observe(element))
     return () => { observer.disconnect(); window.removeEventListener('popstate', syncPage) }
   }, [])
+
+  useEffect(() => {
+    if (page !== 'home') {
+      setActiveSection('')
+      return
+    }
+
+    const sectionObserver = new IntersectionObserver((entries) => {
+      const visibleSections = entries.filter((entry) => entry.isIntersecting).sort((first, second) => first.boundingClientRect.top - second.boundingClientRect.top)
+      setActiveSection(visibleSections[0]?.target.id ?? '')
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: 0 })
+    document.querySelectorAll('#project, #objective, #offers, #faq').forEach((element) => sectionObserver.observe(element))
+    return () => sectionObserver.disconnect()
+  }, [page])
 
   async function request(url: string, payload?: Record<string, unknown>, method?: string): Promise<ApiResult> {
     if (!csrf.current) {
@@ -236,6 +251,7 @@ function App() {
   const announcementLocale = stats.announcement?.comments[requestedLocale] ? requestedLocale : 'fr'
   const scrollTo = (id: string) => {
     if (page !== 'home') navigate('home')
+    if (['project', 'objective', 'offers', 'faq'].includes(id)) setActiveSection(id)
     setMobileMenu(false)
     window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }), 40)
   }
@@ -248,7 +264,7 @@ function App() {
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); scrollTo('top') }} aria-label="NEWS FX accueil"><img src="/news-fx-logo.jpeg" alt="NEWS FX — Informer, analyser, anticiper" /></a>
         <button className="menu-button" aria-label="Ouvrir le menu" aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}><span /><span /></button>
         <nav className={mobileMenu ? 'nav-links nav-open' : 'nav-links'} aria-label="Navigation principale">
-          <button onClick={() => scrollTo('project')}>Le projet</button><button onClick={() => scrollTo('objective')}>Objectif</button><button onClick={() => scrollTo('offers')}>Offres</button><button onClick={() => scrollTo('faq')}>FAQ</button>
+          <button className={activeSection === 'project' ? 'is-active' : ''} aria-current={activeSection === 'project' ? 'location' : undefined} onClick={() => scrollTo('project')}>Le projet</button><button className={activeSection === 'objective' ? 'is-active' : ''} aria-current={activeSection === 'objective' ? 'location' : undefined} onClick={() => scrollTo('objective')}>Objectif</button><button className={activeSection === 'offers' ? 'is-active' : ''} aria-current={activeSection === 'offers' ? 'location' : undefined} onClick={() => scrollTo('offers')}>Offres</button><button className={activeSection === 'faq' ? 'is-active' : ''} aria-current={activeSection === 'faq' ? 'location' : undefined} onClick={() => scrollTo('faq')}>FAQ</button>
         </nav>
         <div className="nav-actions">{user ? <><button className="button button-quiet" onClick={() => navigate('account')}>Mon espace</button>{user.is_admin && <button className="button button-quiet" onClick={() => navigate('admin')}>Admin</button>}</> : <button className="button button-quiet" onClick={() => { pendingPage.current = 'account'; openAuth('login') }}>Connexion</button>}<button className="button button-gold button-small" onClick={() => user ? navigate('account') : openAuth('register')}>{user ? 'Espace membre' : 'Devenir fondateur'}<span aria-hidden="true">↗</span></button></div>
       </header></>}
