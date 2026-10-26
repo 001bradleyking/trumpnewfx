@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 import { Portal } from './Portal'
+import { detectLocale, localeLabels, locales, translate, type Locale } from './locales'
 
 type User = { id: number; name: string; email: string; is_admin: boolean }
 type Announcement = { first_name: string; last_name: string; comments: Partial<Record<'fr' | 'en' | 'es' | 'pt', string>> }
@@ -11,16 +12,6 @@ type Page = 'home' | 'account' | 'payment' | 'admin'
 type ApiResult = { message?: string; user?: User | null; requires_2fa?: boolean; csrf_token?: string; errors?: Record<string, string[]>; payment?: { id: number }; [key: string]: unknown }
 
 const emptyStats: Stats = { target_usd: 100000, raised_usd: 0, founders_count: 0, campaign_end_at: null, standard_duration_months: 0, verified: false, status: 'preparation' }
-const supportedLocales = ['fr', 'en', 'es', 'pt'] as const
-
-function preferredLocale(): typeof supportedLocales[number] {
-  for (const language of navigator.languages.length ? navigator.languages : [navigator.language]) {
-    const locale = language.toLowerCase().split('-')[0]
-    if (supportedLocales.includes(locale as typeof supportedLocales[number])) return locale as typeof supportedLocales[number]
-  }
-  return 'fr'
-}
-
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [stats, setStats] = useState<Stats>(emptyStats)
@@ -31,10 +22,20 @@ function App() {
   const [code, setCode] = useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [activeSection, setActiveSection] = useState('')
+  const [locale, setLocale] = useState<Locale>(() => {
+    const saved = window.localStorage.getItem('newsfx-locale')
+    return saved && locales.includes(saved as Locale) ? saved as Locale : detectLocale()
+  })
   const [page, setPage] = useState<Page>(() => ({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' }[window.location.pathname] as Page | undefined ?? 'home'))
   const csrf = useRef('')
   const pendingPage = useRef<Page | null>(null)
   const pendingOffer = useRef<string | null>(null)
+  const t = (key: string) => translate(locale, key)
+
+  useEffect(() => {
+    document.documentElement.lang = locale
+    window.localStorage.setItem('newsfx-locale', locale)
+  }, [locale])
 
   useEffect(() => {
     const syncPage = () => setPage(({ '/account': 'account', '/payment': 'payment', '/admin': 'admin' } as Record<string, Page>)[window.location.pathname] ?? 'home')
@@ -246,9 +247,8 @@ function App() {
   }
 
   const progress = Math.max(0, Math.min(100, (stats.raised_usd / (stats.target_usd || 100000)) * 100))
-  const requestedLocale = preferredLocale()
-  const announcementText = stats.announcement?.comments[requestedLocale] || stats.announcement?.comments.fr
-  const announcementLocale = stats.announcement?.comments[requestedLocale] ? requestedLocale : 'fr'
+  const announcementText = stats.announcement?.comments[locale as 'fr' | 'en' | 'es' | 'pt'] || stats.announcement?.comments.en
+  const announcementLocale = stats.announcement?.comments[locale as 'fr' | 'en' | 'es' | 'pt'] ? locale : 'en'
   const scrollTo = (id: string) => {
     if (page !== 'home') navigate('home')
     if (['project', 'objective', 'offers', 'faq'].includes(id)) setActiveSection(id)
@@ -263,47 +263,49 @@ function App() {
       <header className="site-header">
         <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); scrollTo('top') }} aria-label="NEWS FX accueil"><img src="/news-fx-logo.jpeg" alt="NEWS FX — Informer, analyser, anticiper" /></a>
         <button className="menu-button" aria-label="Ouvrir le menu" aria-expanded={mobileMenu} onClick={() => setMobileMenu(!mobileMenu)}><span /><span /></button>
-        <nav className={mobileMenu ? 'nav-links nav-open' : 'nav-links'} aria-label="Navigation principale">
-          <button className={activeSection === 'project' ? 'is-active' : ''} aria-current={activeSection === 'project' ? 'location' : undefined} onClick={() => scrollTo('project')}>Le projet</button><button className={activeSection === 'objective' ? 'is-active' : ''} aria-current={activeSection === 'objective' ? 'location' : undefined} onClick={() => scrollTo('objective')}>Objectif</button><button className={activeSection === 'offers' ? 'is-active' : ''} aria-current={activeSection === 'offers' ? 'location' : undefined} onClick={() => scrollTo('offers')}>Offres</button><button className={activeSection === 'faq' ? 'is-active' : ''} aria-current={activeSection === 'faq' ? 'location' : undefined} onClick={() => scrollTo('faq')}>FAQ</button>
+        <nav className={mobileMenu ? 'nav-links nav-open' : 'nav-links'} aria-label="Main navigation">
+          <button className={activeSection === 'project' ? 'is-active' : ''} aria-current={activeSection === 'project' ? 'location' : undefined} onClick={() => scrollTo('project')}>{t('project')}</button><button className={activeSection === 'objective' ? 'is-active' : ''} aria-current={activeSection === 'objective' ? 'location' : undefined} onClick={() => scrollTo('objective')}>{t('objective')}</button><button className={activeSection === 'offers' ? 'is-active' : ''} aria-current={activeSection === 'offers' ? 'location' : undefined} onClick={() => scrollTo('offers')}>{t('offers')}</button><button className={activeSection === 'faq' ? 'is-active' : ''} aria-current={activeSection === 'faq' ? 'location' : undefined} onClick={() => scrollTo('faq')}>{t('faq')}</button>
         </nav>
-        <div className="nav-actions">{user ? <><button className="button button-quiet" onClick={() => navigate('account')}>Mon espace</button>{user.is_admin && <button className="button button-quiet" onClick={() => navigate('admin')}>Admin</button>}</> : <button className="button button-quiet" onClick={() => { pendingPage.current = 'account'; openAuth('login') }}>Connexion</button>}<button className="button button-gold button-small" onClick={() => user ? navigate('account') : openAuth('register')}>{user ? 'Espace membre' : 'Devenir fondateur'}<span aria-hidden="true">↗</span></button></div>
+        <div className="nav-actions"><label className="language-select"><span className="sr-only">Interface language</span><select aria-label="Interface language" value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>{locales.map((language) => <option value={language} key={language}>{localeLabels[language]}</option>)}</select></label>{user ? <><button className="button button-quiet" onClick={() => navigate('account')}>My account</button>{user.is_admin && <button className="button button-quiet" onClick={() => navigate('admin')}>Admin</button>}</> : <button className="button button-quiet" onClick={() => { pendingPage.current = 'account'; openAuth('login') }}>{t('login')}</button>}<button className="button button-gold button-small" onClick={() => user ? navigate('account') : openAuth('register')}>{user ? 'Member area' : t('join')}<span aria-hidden="true">↗</span></button></div>
       </header></>}
 
-      <main id="top">
+      <main id="top" lang={locale}>
         {page === 'home' ? <>
         <section className="hero section-wrap">
           <div className="hero-copy">
-            <div className="eyebrow"><span className="live-dot" /> EN PRÉPARATION <span className="eyebrow-divider" /> NEWS FX</div>
-            <h1>L’information qui éclaire.<br /><span>Le contexte qui compte.</span></h1>
-            <p className="hero-lead">Une veille structurée sur les annonces politiques et économiques, avec sources, horodatages et analyses mesurées. Pensée pour les traders qui veulent mieux comprendre l’actualité.</p>
-            <div className="hero-actions"><button className="button button-gold button-large" onClick={() => user ? scrollTo('member-space') : openAuth('register')}>Rejoindre les fondateurs <span aria-hidden="true">↗</span></button><button className="button button-outline button-large" onClick={() => scrollTo('project')}><span className="play-icon">▶</span> Découvrir le projet</button></div>
-            <div className="hero-proof"><div className="proof-mark">✳</div><p><b>La transparence avant tout.</b><br /><span>Pas de promesse de gains. Des sources et du contexte.</span></p></div>
+            <div className="eyebrow"><span className="live-dot" /> {t('prep')} <span className="eyebrow-divider" /> NEWS FX</div>
+            <h1>{t('headline')}<br /><span>{t('headline2')}</span></h1>
+            <p className="hero-lead">{t('lead')}</p>
+            <div className="hero-actions"><button className="button button-gold button-large" onClick={() => user ? scrollTo('member-space') : openAuth('register')}>{t('joinCta')} <span aria-hidden="true">↗</span></button><button className="button button-outline button-large" onClick={() => scrollTo('project')}><span className="play-icon">▶</span> {t('discover')}</button></div>
+            <div className="hero-proof"><div className="proof-mark">✳</div><p><b>{t('proof')}</b><br /><span>{t('proof2')}</span></p></div>
           </div>
           <div className="hero-visual">
             <div className="visual-glow" />
             <div className="signal-card glass-card">
-              <div className="signal-top"><span className="signal-label"><span className="live-dot" /> PROJET EN PRÉPARATION</span><span className="signal-time">NEWS FX</span></div>
+              <div className="signal-top"><span className="signal-label"><span className="live-dot" /> {t('prep')}</span><span className="signal-time">NEWS FX</span></div>
               <img className="hero-logo" src="/news-fx-logo.jpeg" alt="Logo NEWS FX" />
               <div className="signal-rule" />
-              <div className="signal-bottom"><div><span className="mini-label">OBJECTIF D’ACCÈS API</span><b>100 000 <small>USD*</small></b></div><div className="signal-orbit"><span>FX</span></div></div>
-              <p className="signal-note">*Estimation de travail à confirmer auprès du fournisseur.</p>
+              <div className="signal-bottom"><div><span className="mini-label">{t('api')}</span><b>100 000 <small>USD*</small></b></div><div className="signal-orbit"><span>FX</span></div></div>
+              <p className="signal-note">{t('estimate')}</p>
             </div>
-            <div className="float-chip chip-top"><span className="chip-icon">◉</span><div><b>Sources identifiées</b><small>Quand elles sont autorisées</small></div></div>
-            <div className="float-chip chip-bottom"><span className="chip-icon gold-icon">↗</span><div><b>Du contexte, pas des certitudes</b><small>Information générale · marché à risque</small></div></div>
+            <div className="float-chip chip-top"><span className="chip-icon">◉</span><div><b>{t('sources')}</b><small>{t('authorized')}</small></div></div>
+            <div className="float-chip chip-bottom"><span className="chip-icon gold-icon">↗</span><div><b>{t('context')}</b><small>{t('risk')}</small></div></div>
             <div className="hero-grid-lines" />
           </div>
         </section>
 
-        <section className="trust-strip section-wrap" aria-label="Principes du projet"><div><span>01</span><b>Sources transparentes</b></div><i /><div><span>02</span><b>Analyse avec contexte</b></div><i /><div><span>03</span><b>Aucune promesse de profit</b></div></section>
+        <section className="trust-strip section-wrap" aria-label={t('principles')}><div><span>01</span><b>{t('transparent')}</b></div><i /><div><span>02</span><b>{t('analysis')}</b></div><i /><div><span>03</span><b>{t('noProfit')}</b></div></section>
 
         <section className="section-wrap project-section" id="project">
-          <div className="section-heading reveal"><div><div className="eyebrow">NOTRE AMBITION</div><h2>Du signal à la compréhension.</h2></div><p>NEWS FX construit un service d’information financière qui distingue clairement les faits, les sources et les interprétations.</p></div>
+          <div className="section-heading reveal"><div><div className="eyebrow">{t('ambition')}</div><h2>{t('signal')}</h2></div><p>{t('desc')}</p></div>
           <div className="feature-grid">
             <article className="feature-card reveal"><span className="feature-number">01 / SOURCES</span><div className="feature-icon">⌁</div><h3>Une veille structurée</h3><p>Suivre les annonces politiques et économiques susceptibles de compter pour les marchés, avec lien vers la source lorsque les droits le permettent.</p></article>
             <article className="feature-card reveal delay-one"><span className="feature-number">02 / CONTEXTE</span><div className="feature-icon">◌</div><h3>Un contexte lisible</h3><p>Résumé en français, catégorie et horodatage. Les analyses sont présentées comme des analyses, jamais comme des faits confirmés.</p></article>
             <article className="feature-card reveal delay-two"><span className="feature-number">03 / COMMUNAUTÉ</span><div className="feature-icon">↗</div><h3>Un espace membre privé</h3><p>Les alertes et l’accès communautaire seront réservés aux membres actifs, après validation technique et confirmation du service.</p></article>
           </div>
         </section>
+
+        <section className="section-wrap regions-section"><div className="section-heading reveal"><div><div className="eyebrow">{t('regions')}</div><h2>{t('regionsTitle')}</h2></div><p>{t('regionsDesc')}</p></div><div className="regions-grid">{(['asia', 'europe', 'americas', 'mena', 'global'] as const).map((region, index) => <article className="region-card reveal" key={region}><span className="region-index">0{index + 1}</span><span className="region-globe" aria-hidden="true">{['◉', '◎', '◌', '◍', '✳'][index]}</span><h3>{t(region)}</h3><p>{t('regionDetail')}</p></article>)}</div></section>
 
         <section className="objective-section" id="objective"><div className="section-wrap objective-grid">
           <div className="objective-copy reveal"><div className="eyebrow">UNE ÉTAPE À LA FOIS</div><h2>Préparer l’accès.<br /><span>Construire la confiance.</span></h2><p>L’accès à Truth API n’est pas encore confirmé. Le montant de 100 000 USD est une estimation de travail : il devra être confirmé par une proposition officielle et une autorisation écrite de redistribution.</p><div className="objective-footnote"><span>↗</span> Les versements ne sont possibles que si la campagne est ouverte dans l’espace admin.</div></div>
