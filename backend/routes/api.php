@@ -2,6 +2,7 @@
 
 use App\Models\MemberPayment;
 use App\Models\SiteSetting;
+use App\Models\Testimonial;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/status', fn () => response()->json([
@@ -10,6 +11,20 @@ Route::get('/status', fn () => response()->json([
     'api_access_confirmed' => false,
     'payments_enabled' => (SiteSetting::whereKey('campaign_status')->value('value') ?? 'preparation') === 'open',
 ]));
+
+Route::get('/public/testimonials', fn () => response()->json(
+    Testimonial::query()->where('is_published', true)->latest()->limit(30)->get()->map(fn (Testimonial $testimonial) => [
+        'id' => $testimonial->id,
+        'first_name' => $testimonial->first_name,
+        'last_name' => $testimonial->last_name,
+        'comments' => array_filter([
+            'fr' => $testimonial->comment_fr,
+            'en' => $testimonial->comment_en,
+            'es' => $testimonial->comment_es,
+            'pt' => $testimonial->comment_pt,
+        ], fn ($comment) => is_string($comment) && $comment !== ''),
+    ])
+));
 
 Route::get('/public/stats', fn () => response()->json([
     'target_usd' => (int) (SiteSetting::whereKey('target_usd')->value('value') ?? config('newsfx.default_target_usd')),

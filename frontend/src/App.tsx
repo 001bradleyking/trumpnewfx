@@ -6,6 +6,7 @@ import { detectLocale, localeLabels, locales, translate, type Locale } from './l
 
 type User = { id: number; name: string; email: string; is_admin: boolean }
 type Announcement = { first_name: string; last_name: string; comments: Partial<Record<'fr' | 'en' | 'es' | 'pt', string>> }
+type Testimonial = { id: number; first_name: string; last_name: string | null; comments: Partial<Record<'fr' | 'en' | 'es' | 'pt', string>> }
 type Stats = { target_usd: number; raised_usd: number; founders_count: number; campaign_end_at: string | null; standard_duration_months: number; verified: boolean; status: string; announcement?: Announcement | null }
 type AuthView = 'login' | 'register' | 'verify' | 'forgot' | 'reset'
 type Page = 'home' | 'account' | 'payment' | 'admin'
@@ -15,6 +16,7 @@ const emptyStats: Stats = { target_usd: 100000, raised_usd: 0, founders_count: 0
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [stats, setStats] = useState<Stats>(emptyStats)
+  const [testimonials, setTestimonials] = useState<Testimonial[]>([])
   const [authView, setAuthView] = useState<AuthView | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -89,6 +91,7 @@ function App() {
         // The public landing page remains usable while the API is unavailable.
       }
     })()
+    void fetch('/api/public/testimonials', { headers: { Accept: 'application/json' } }).then((response) => response.ok ? response.json() : []).then((items) => setTestimonials(items as Testimonial[])).catch(() => setTestimonials([]))
 
     const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
       if (entry.isIntersecting) {
@@ -327,6 +330,7 @@ function App() {
 
         {user && <section className="section-wrap member-section" id="member-space"><div className="member-card glass-card"><div><div className="eyebrow">{t('personalArea')}</div><h2>{t('hello')} {user.name.split(' ')[0]}.</h2><p>{t('connectedWith')} {user.email}. {t('verifiedSession')}</p><div className="member-status"><span className="live-dot" /> {t('verifiedAccount')}</div><p className="member-note">{t('memberNote')}</p></div><button className="button button-outline" onClick={() => navigate('account')}>{t('openAccount')}</button></div></section>}
         </> : <Portal page={page} request={request} navigate={(destination, query) => navigate(destination, query)} userName={user?.name ?? ''} logout={() => void logout()} locale={locale} />}
+        {page !== 'admin' && testimonials.length > 0 && <section className="testimonials-section" aria-label={t('testimonialsTitle')}><div className="section-wrap"><div className="testimonial-heading"><div><div className="eyebrow">{t('communityVoices')}</div><h2>{t('testimonialsTitle')}</h2></div><p>{t('testimonialsIntro')}</p></div><div className="testimonial-window"><div className={testimonials.length > 1 ? 'testimonial-track testimonial-track-moving' : 'testimonial-track'}>{[...testimonials, ...(testimonials.length > 1 ? testimonials : [])].map((testimonial, index) => { const comment = testimonial.comments[locale as 'fr' | 'en' | 'es' | 'pt'] || testimonial.comments.en || testimonial.comments.fr || Object.values(testimonial.comments)[0]; return comment ? <article className="testimonial-card" key={`${testimonial.id}-${index}`} aria-hidden={index >= testimonials.length}><span className="testimonial-quote" aria-hidden="true">“</span><p lang={testimonial.comments[locale as 'fr' | 'en' | 'es' | 'pt'] ? locale : testimonial.comments.en ? 'en' : 'fr'}>{comment}</p><div className="testimonial-author"><span>{testimonial.first_name.slice(0, 1).toUpperCase()}</span><b>{testimonial.first_name} {testimonial.last_name ?? ''}</b></div></article> : null })}</div></div></div></section>}
       </main>
 
       {page !== 'admin' && <footer className="site-footer"><div className="footer-top section-wrap"><a className="footer-logo" href="#top" onClick={(event) => { event.preventDefault(); navigate('home') }}><img src="/news-fx-logo.jpeg" alt="NEWS FX" /></a><p>NEWS FX<br /><span>{t('footerClaim')}</span></p><div className="footer-links"><button onClick={() => scrollTo('project')}>{t('about')}</button><button onClick={() => scrollTo('faq')}>FAQ</button><a href="mailto:contact@news-fx.com">Contact</a><button onClick={() => user ? navigate('account') : (pendingPage.current = 'account', openAuth('login'))}>{t('memberArea')}</button></div></div><div className="footer-bottom section-wrap"><span>© {new Date().getFullYear()} NEWS FX · {t('rights')}</span><span>{t('generalInfo')}</span><button onClick={() => setMessage(t('legal'))}>{t('legal')}</button></div></footer>}

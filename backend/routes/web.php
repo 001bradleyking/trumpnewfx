@@ -39,6 +39,9 @@ Route::prefix('api')->group(function (): void {
                 Route::patch('/users/{user}', [AdminController::class, 'updateUser']);
                 Route::post('/users/{user}/reset-password', [AdminController::class, 'sendUserPasswordReset'])->middleware('throttle:3,1');
                 Route::put('/settings', [AdminController::class, 'updateSettings']);
+                Route::post('/testimonials', [AdminController::class, 'createTestimonial']);
+                Route::patch('/testimonials/{testimonial}', [AdminController::class, 'updateTestimonial']);
+                Route::delete('/testimonials/{testimonial}', [AdminController::class, 'deleteTestimonial']);
                 Route::post('/payments/{payment}/review', [AdminController::class, 'reviewPayment']);
                 Route::post('/events/{event}/geolocate', [AdminController::class, 'geolocate']);
             });

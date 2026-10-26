@@ -6,6 +6,7 @@ use App\Models\AuditEvent;
 use App\Models\MemberPayment;
 use App\Models\SiteSetting;
 use App\Models\TwoFactorChallenge;
+use App\Models\Testimonial;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -40,6 +41,7 @@ class AdminController
                 'announcement_pt' => $this->setting('announcement_pt', ''),
             ],
             'payments' => MemberPayment::with('user:id,name,email')->latest()->limit(100)->get(),
+            'testimonials' => Testimonial::latest()->limit(100)->get(),
             'users' => User::query()->select('id', 'name', 'email', 'email_verified_at', 'is_active', 'created_at')->latest()->limit(100)->get(),
             'events' => AuditEvent::with('user:id,name,email')->latest()->limit(200)->get(),
             'counts' => [
@@ -169,6 +171,44 @@ class AdminController
         });
 
         return response()->json(['message' => 'Paramètres enregistrés.']);
+    }
+
+    public function createTestimonial(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'first_name' => ['required', 'string', 'min:1', 'max:80'],
+            'last_name' => ['nullable', 'string', 'max:80'],
+            'comment_fr' => ['nullable', 'string', 'max:1000'],
+            'comment_en' => ['nullable', 'string', 'max:1000'],
+            'comment_es' => ['nullable', 'string', 'max:1000'],
+            'comment_pt' => ['nullable', 'string', 'max:1000'],
+            'is_published' => ['required', 'boolean'],
+        ]);
+        abort_if(collect(['fr', 'en', 'es', 'pt'])->every(fn ($language) => blank($data["comment_{$language}"] ?? null)), 422, 'Ajoutez au moins un commentaire avant d’enregistrer cet avis.');
+        $testimonial = Testimonial::create($data);
+        AuditEvent::record($request, 'admin_testimonial_created', Auth::id());
+
+        return response()->json(['message' => $data['is_published'] ? 'Avis publié.' : 'Avis enregistré en brouillon.', 'testimonial' => $testimonial], 201);
+    }
+
+    public function updateTestimonial(Request $request, Testimonial $testimonial): JsonResponse
+    {
+        $data = $request->validate([
+            'is_published' => ['required', 'boolean'],
+        ]);
+        abort_if($data['is_published'] && collect(['fr', 'en', 'es', 'pt'])->every(fn ($language) => blank($testimonial->{"comment_{$language}"})), 422, 'Ajoutez au moins un commentaire avant de publier cet avis.');
+        $testimonial->update($data);
+        AuditEvent::record($request, 'admin_testimonial_updated', Auth::id());
+
+        return response()->json(['message' => $data['is_published'] ? 'Avis publié.' : 'Avis retiré de la page publique.', 'testimonial' => $testimonial]);
+    }
+
+    public function deleteTestimonial(Request $request, Testimonial $testimonial): JsonResponse
+    {
+        $testimonial->delete();
+        AuditEvent::record($request, 'admin_testimonial_deleted', Auth::id());
+
+        return response()->json(['message' => 'Avis supprimé.']);
     }
 
     public function reviewPayment(Request $request, MemberPayment $payment): JsonResponse
